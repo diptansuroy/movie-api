@@ -1,1 +1,2 @@
-HELLO
+This is an API, which is responsible for getting movie recommendations based on your favourite movies, sorted by their imDb rating and the order is genre, director and then actor. There are other possible requests you can make, which include asking for genre based movie recommendations, getting details about entire seasons of a show or a particular episode or even a movie, all directly integrated from imDb, using omDb API service, available online.
+For reference, get your own key from omDb API website and add it as a separate file called .env, which contains your key.
