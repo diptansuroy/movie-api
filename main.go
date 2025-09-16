@@ -426,7 +426,7 @@ func getMoviePool() []string {
 		"Braveheart", "American Beauty", "A Beautiful Mind", "Black Swan",
 		"Parasite", "La La Land", "The Big Short", "12 Years a Slave",
 		"The Imitation Game", "The Theory of Everything", "No Country for Old Men",
-		"There Will Be Blood", "Birdman", "Her", "The Grand Budapest Hotel", /*************  ✨ Windsurf Command ⭐  *************/
+		"There Will Be Blood", "Birdman", "Her", "The Grand Budapest Hotel",
 		"Spotlight", "Argo", "The Hurt Locker", "Slumdog Millionaire",
 		"Million Dollar Baby", "Mystic River", "The Pianist", "The Truman Show",
 		"Eternal Sunshine of the Spotless Mind", "The Sixth Sense", "A Few Good Men",
