@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
-	"net/url"
 
 	"github.com/joho/godotenv"
 )
@@ -28,7 +28,6 @@ type Movie struct {
 	Error        string `json:"Error"`
 }
 
-
 type Recommendation struct {
 	Title      string `json:"Title"`
 	Year       string `json:"Year"`
@@ -36,6 +35,7 @@ type Recommendation struct {
 	Plot       string `json:"Plot"`
 	Reason     string `json:"Reason"`
 }
+
 type Season struct {
 	Title    string         `json:"Title"`
 	Season   string         `json:"Season"`
@@ -46,56 +46,73 @@ type Season struct {
 }
 
 type EpisodeBrief struct {
-	Title string `json:"Title"`
-	Released string `json:"Released"`
-	Episode string `json:"Episode"`
+	Title      string `json:"Title"`
+	Released   string `json:"Released"`
+	Episode    string `json:"Episode"`
 	IMDBRating string `json:"imdbRating"`
-	IMDBID string `json:"imdbID"`
+	IMDBID     string `json:"imdbID"`
 }
+
 var apiKey string
 
 func fetchFromOMDb(query string) (*Movie, error) {
 	resp, err := http.Get("http://www.omdbapi.com/?" + query + "&apikey=" + apiKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call OMDb API")
+		return nil, fmt.Errorf("network error: %v", err)
 	}
 	defer resp.Body.Close()
 
 	var movie Movie
 	if err := json.NewDecoder(resp.Body).Decode(&movie); err != nil {
-		return nil, fmt.Errorf("failed to decode OMDb response")
+		return nil, fmt.Errorf("decoding error: %v", err)
 	}
 
 	if movie.Response == "False" {
-		return nil, fmt.Errorf(movie.Error)
+		return nil, fmt.Errorf("not found: %s", movie.Error)
 	}
 	return &movie, nil
 }
+
 func fetchSeasonFromOMDb(query string) (*Season, error) {
 	resp, err := http.Get("http://www.omdbapi.com/?" + query + "&apikey=" + apiKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call OMDb API")
+		return nil, fmt.Errorf("network error: %v", err)
 	}
 	defer resp.Body.Close()
 
 	var season Season
 	if err := json.NewDecoder(resp.Body).Decode(&season); err != nil {
-		return nil, fmt.Errorf("failed to decode OMDb response")
+		return nil, fmt.Errorf("decoding error: %v", err)
 	}
 	if season.Response == "False" {
-		return nil, fmt.Errorf(season.Error)
+		return nil, fmt.Errorf("not found: %s", season.Error)
 	}
 	return &season, nil
 }
+
+func writeError(w http.ResponseWriter, err error) {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "not found"):
+		http.Error(w, "404 "+msg, http.StatusNotFound)
+	case strings.Contains(msg, "network"):
+		http.Error(w, "500 Internal Server Error: "+msg, http.StatusInternalServerError)
+	case strings.Contains(msg, "decoding"):
+		http.Error(w, "500 Internal Server Error: "+msg, http.StatusInternalServerError)
+	default:
+		http.Error(w, "500 Internal Server Error: "+msg, http.StatusInternalServerError)
+	}
+}
+
 func movieDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	title := r.URL.Query().Get("title")
 	if title == "" {
-		http.Error(w, "Missing title query parameter", http.StatusBadRequest)
+		http.Error(w, "400 Bad Request: missing 'title' query parameter", http.StatusBadRequest)
 		return
 	}
 	movie, err := fetchFromOMDb("t=" + url.QueryEscape(title))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeError(w, err)
 		return
 	}
 	response := map[string]interface{}{
@@ -107,10 +124,7 @@ func movieDetailsHandler(w http.ResponseWriter, r *http.Request) {
 		"Director": movie.Director,
 		"Ratings":  movie.IMDBRating,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	enc.Encode(response)
+	writeJSON(w, response)
 }
 
 func episodeDetailsHandler(w http.ResponseWriter, r *http.Request) {
@@ -119,20 +133,20 @@ func episodeDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	episode := r.URL.Query().Get("episode_number")
 
 	if series == "" || season == "" || episode == "" {
-		http.Error(w, "Missing required query parameters", http.StatusBadRequest)
+		http.Error(w, "400 Bad Request: missing 'series_title', 'season', or 'episode_number'", http.StatusBadRequest)
 		return
 	}
 
 	seriesData, err := fetchFromOMDb("t=" + url.QueryEscape(series))
 	if err != nil {
-		http.Error(w, "Series not found: "+err.Error(), http.StatusNotFound)
+		writeError(w, err)
 		return
 	}
 
 	query := fmt.Sprintf("i=%s&Season=%s&Episode=%s", seriesData.IMDBID, url.QueryEscape(season), url.QueryEscape(episode))
 	episodeData, err := fetchFromOMDb(query)
 	if err != nil {
-		http.Error(w, "Episode not found: "+err.Error(), http.StatusNotFound)
+		writeError(w, err)
 		return
 	}
 
@@ -145,23 +159,19 @@ func episodeDetailsHandler(w http.ResponseWriter, r *http.Request) {
 		"Plot":     episodeData.Plot,
 		"Director": episodeData.Director,
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	enc.Encode(response)
+	writeJSON(w, response)
 }
 
 func recommendMoviesHandler(w http.ResponseWriter, r *http.Request) {
 	fav := r.URL.Query().Get("favorite_movie")
 	if fav == "" {
-		http.Error(w, "Missing favorite_movie query parameter", http.StatusBadRequest)
+		http.Error(w, "400 Bad Request: missing 'favorite_movie' query parameter", http.StatusBadRequest)
 		return
 	}
 
 	favMovie, err := fetchFromOMDb("t=" + url.QueryEscape(fav))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeError(w, err)
 		return
 	}
 
@@ -171,14 +181,12 @@ func recommendMoviesHandler(w http.ResponseWriter, r *http.Request) {
 		"director_based": {},
 		"actor_based":    {},
 	}
-
-	// Global seen map to avoid repeats across all categories
 	seenAll := map[string]bool{}
 
-	// GENRE BASED
+	// Genre recommendations
 	favGenres := strings.Split(favMovie.Genre, ", ")
 	for _, t := range titles {
-		if len(recommendations["genre_based"]) >= 15 {
+		if len(recommendations["genre_based"]) >= 20 {
 			break
 		}
 		m, err := fetchFromOMDb("t=" + url.QueryEscape(t))
@@ -202,9 +210,9 @@ func recommendMoviesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// DIRECTOR BASED
+	// Director recommendations
 	for _, t := range titles {
-		if len(recommendations["director_based"]) >= 15 {
+		if len(recommendations["director_based"]) >= 20 {
 			break
 		}
 		m, err := fetchFromOMDb("t=" + url.QueryEscape(t))
@@ -224,10 +232,10 @@ func recommendMoviesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ACTOR BASED
+	// Actor recommendations
 	favActors := strings.Split(favMovie.Actors, ", ")
 	for _, t := range titles {
-		if len(recommendations["actor_based"]) >= 15 {
+		if len(recommendations["actor_based"]) >= 20 {
 			break
 		}
 		m, err := fetchFromOMDb("t=" + url.QueryEscape(t))
@@ -265,14 +273,6 @@ func recommendMoviesHandler(w http.ResponseWriter, r *http.Request) {
 	sortByRating(recommendations["director_based"])
 	sortByRating(recommendations["actor_based"])
 
-	// Trim each to 15 max
-	for key, recs := range recommendations {
-		if len(recs) > 15 {
-			recommendations[key] = recs[:15]
-		}
-	}
-
-	// Ordered response: genre → director → actor
 	resp := map[string]interface{}{
 		"favorite_movie": favMovie.Title,
 		"recommendations": []map[string]interface{}{
@@ -281,19 +281,13 @@ func recommendMoviesHandler(w http.ResponseWriter, r *http.Request) {
 			{"actor_based": recommendations["actor_based"]},
 		},
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	enc.Encode(resp)
+	writeJSON(w, resp)
 }
-
-
 
 func genreTopMoviesHandler(w http.ResponseWriter, r *http.Request) {
 	genre := r.URL.Query().Get("genre")
 	if genre == "" {
-		http.Error(w, "Missing genre query parameter", http.StatusBadRequest)
+		http.Error(w, "400 Bad Request: missing 'genre' query parameter", http.StatusBadRequest)
 		return
 	}
 	titles := getMoviePool()
@@ -311,7 +305,7 @@ func genreTopMoviesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(matches) == 0 {
-		http.Error(w, "No movies found for genre "+genre, http.StatusNotFound)
+		http.Error(w, "404 Not Found: no movies found for genre '"+genre+"'", http.StatusNotFound)
 		return
 	}
 	sort.Slice(matches, func(i, j int) bool {
@@ -320,61 +314,56 @@ func genreTopMoviesHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(matches[j].IMDBRating, "%f", &rj)
 		return ri > rj
 	})
-	if len(matches) > 15 {
-		matches = matches[:15]
+	if len(matches) > 20 {
+		matches = matches[:20]
 	}
 	resp := map[string]interface{}{
 		"genre":  genre,
 		"movies": matches,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	enc.Encode(resp)
+	writeJSON(w, resp)
 }
 
 func seriesDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	series := r.URL.Query().Get("title")
 	if series == "" {
-		http.Error(w, "Missing title query parameter", http.StatusBadRequest)
+		http.Error(w, "400 Bad Request: missing 'title' query parameter", http.StatusBadRequest)
 		return
 	}
 	seriesData, err := fetchFromOMDb("t=" + url.QueryEscape(series) + "&type=series")
 	if err != nil {
-		http.Error(w, "Series not found: "+err.Error(), http.StatusNotFound)
+		writeError(w, err)
 		return
 	}
 	response := map[string]interface{}{
 		"Title":        seriesData.Title,
 		"Director":     seriesData.Director,
 		"Plot":         seriesData.Plot,
-		"Total Seasons": seriesData.TotalSeasons,
+		"TotalSeasons": seriesData.TotalSeasons,
 	}
 	writeJSON(w, response)
 }
-
 
 func seasonDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	series := r.URL.Query().Get("series_title")
 	season := r.URL.Query().Get("season")
 	if series == "" || season == "" {
-		http.Error(w, "Missing required query parameters", http.StatusBadRequest)
+		http.Error(w, "400 Bad Request: missing 'series_title' or 'season'", http.StatusBadRequest)
 		return
 	}
 
 	seriesData, err := fetchFromOMDb("t=" + url.QueryEscape(series) + "&type=series")
 	if err != nil {
-		http.Error(w, "Series not found: "+err.Error(), http.StatusNotFound)
+		writeError(w, err)
 		return
 	}
 
 	seasonData, err := fetchSeasonFromOMDb("i=" + seriesData.IMDBID + "&Season=" + season)
 	if err != nil {
-		http.Error(w, "Season not found: "+err.Error(), http.StatusNotFound)
+		writeError(w, err)
 		return
 	}
 
-	// Build enriched list with plots
 	type EpisodeFull struct {
 		Title      string `json:"Title"`
 		Released   string `json:"Released"`
@@ -386,7 +375,6 @@ func seasonDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	var enrichedEpisodes []EpisodeFull
 
 	for _, ep := range seasonData.Episodes {
-		// Fetch episode details by IMDbID to get the Plot
 		details, err := fetchFromOMDb("i=" + ep.IMDBID)
 		if err == nil {
 			enrichedEpisodes = append(enrichedEpisodes, EpisodeFull{
@@ -398,7 +386,6 @@ func seasonDetailsHandler(w http.ResponseWriter, r *http.Request) {
 				Plot:       details.Plot,
 			})
 		} else {
-			// fallback if plot fetch fails
 			enrichedEpisodes = append(enrichedEpisodes, EpisodeFull{
 				Title:      ep.Title,
 				Released:   ep.Released,
@@ -418,14 +405,13 @@ func seasonDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
-
 func writeJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	enc.Encode(data)
 }
-
 
 func getMoviePool() []string {
 	return []string{
@@ -440,7 +426,7 @@ func getMoviePool() []string {
 		"Braveheart", "American Beauty", "A Beautiful Mind", "Black Swan",
 		"Parasite", "La La Land", "The Big Short", "12 Years a Slave",
 		"The Imitation Game", "The Theory of Everything", "No Country for Old Men",
-		"There Will Be Blood", "Birdman", "Her", "The Grand Budapest Hotel",
+		"There Will Be Blood", "Birdman", "Her", "The Grand Budapest Hotel", /*************  ✨ Windsurf Command ⭐  *************/
 		"Spotlight", "Argo", "The Hurt Locker", "Slumdog Millionaire",
 		"Million Dollar Baby", "Mystic River", "The Pianist", "The Truman Show",
 		"Eternal Sunshine of the Spotless Mind", "The Sixth Sense", "A Few Good Men",
@@ -469,12 +455,14 @@ func main() {
 		fmt.Println("OMDB_API_KEY not set in environment")
 		return
 	}
+
 	http.HandleFunc("/api/movie", movieDetailsHandler)
 	http.HandleFunc("/api/episode", episodeDetailsHandler)
 	http.HandleFunc("/api/recommend", recommendMoviesHandler)
 	http.HandleFunc("/api/movies/genre", genreTopMoviesHandler)
 	http.HandleFunc("/api/series", seriesDetailsHandler)
 	http.HandleFunc("/api/season", seasonDetailsHandler)
+
 	fmt.Println("Server running on port 8080")
 	http.ListenAndServe(":8080", nil)
 }
