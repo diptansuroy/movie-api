@@ -339,7 +339,7 @@ func seriesDetailsHandler(w http.ResponseWriter, r *http.Request) {
 		"Title":        seriesData.Title,
 		"Director":     seriesData.Director,
 		"Plot":         seriesData.Plot,
-		"TotalSeasons": seriesData.TotalSeasons,
+		"Total Seasons": seriesData.TotalSeasons,
 	}
 	writeJSON(w, response)
 }
